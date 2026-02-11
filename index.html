@@ -19,34 +19,46 @@
   </style>
   
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
-<script>
-  // هماهنگ کردن رنگ هدر اپلیکیشن با تم تلگرام کاربر
-  window.Telegram.WebApp.ready();
-  window.Telegram.WebApp.expand(); // باز شدن تمام صفحه مینی‌اپ
-</script>
-
+  <script>
+    const tg = window.Telegram.WebApp;
+    tg.ready();
+    tg.expand();
+    tg.setHeaderColor('#2e7d32');
+  </script>
 </head>
 <body>
 <div id="loading" class="loading-overlay"><h3>Loading Tana Partez Farm GIS Map</h3></div>
 <div id="map"></div>
 <button id="locate-btn" onclick="locateUser()">📍</button>
+
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
+  // آدرس وب‌اپ گوگل خود را اینجا بگذارید (باید به /exec ختم شود)
+  const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycby9worLyf53qYQhs90vKO2JvFTrUHjKIS3JrYsZSi7f2RS5D0oL4jYmjjXxY8BUB-m1/exec";
+
   let map;
   let userMarker;
   let photoBase64 = null;
+
   function initMap() {
     map = L.map('map').setView([40.1772, 44.5035], 9);
-    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { attribution: 'Esri, Maxar' }).addTo(map);
+    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { attribution: 'Esri' }).addTo(map);
+    
     map.on('locationfound', e => {
       if (userMarker) map.removeLayer(userMarker);
       userMarker = L.circleMarker(e.latlng, {radius: 8, color: '#1565c0', fillColor: '#2196F3', fillOpacity: 0.9}).addTo(map);
     });
-    google.script.run.withSuccessHandler(drawPolygons).withFailureHandler(err => alert("System Error: " + err)).getMapData();
+
+    // دریافت داده‌ها از گوگل با متد fetch
+    fetch(GOOGLE_SCRIPT_URL + "?action=getMapData")
+      .then(res => res.json())
+      .then(drawPolygons)
+      .catch(err => alert("System Error: " + err));
   }
+
   function drawPolygons(data) {
     document.getElementById('loading').style.display = 'none';
-    if (!data || data.error) { alert("Error: " + (data ? data.error : "No data")); return; }
+    if (!data || data.error) { alert("Error: No data received"); return; }
     const layers = [];
     data.forEach(item => {
       const polygon = L.polygon(item.coords, { color: item.color, fillColor: item.color, fillOpacity: 0.4, weight: 2 }).addTo(map);
@@ -56,63 +68,69 @@
     });
     if (layers.length > 0) { const group = new L.featureGroup(layers); map.fitBounds(group.getBounds(), {padding: [40, 40]}); }
   }
-function handlePhoto(input) {
+
+  function handlePhoto(input) {
     const file = input.files[0];
     if (file) {
       const reader = new FileReader();
       reader.onload = (e) => {
         const img = new Image();
         img.onload = () => {
-          // ایجاد یک بوم (Canvas) برای کوچک کردن عکس
           const canvas = document.createElement('canvas');
-          let width = img.width;
-          let height = img.height;
-
-          // حداکثر عرض یا ارتفاع را روی 1000 پیکسل تنظیم می‌کنیم
-          const MAX_SIZE = 1000; 
-          if (width > height) {
-            if (width > MAX_SIZE) {
-              height *= MAX_SIZE / width;
-              width = MAX_SIZE;
-            }
-          } else {
-            if (height > MAX_SIZE) {
-              width *= MAX_SIZE / height;
-              height = MAX_SIZE;
-            }
-          }
-
-          canvas.width = width;
-          canvas.height = height;
+          let width = img.width, height = img.height;
+          const MAX_SIZE = 1000;
+          if (width > height) { if (width > MAX_SIZE) { height *= MAX_SIZE / width; width = MAX_SIZE; } }
+          else { if (height > MAX_SIZE) { width *= MAX_SIZE / height; height = MAX_SIZE; } }
+          canvas.width = width; canvas.height = height;
           const ctx = canvas.getContext('2d');
           ctx.drawImage(img, 0, 0, width, height);
-
-          // تبدیل به فرمت JPEG با کیفیت 0.7 برای کاهش حجم چشمگیر
           photoBase64 = canvas.toDataURL('image/jpeg', 0.7);
-          
           const preview = document.getElementById('preview-img');
-          preview.src = photoBase64;
-          preview.style.display = 'block';
-          console.log("Image compressed successfully.");
+          preview.src = photoBase64; preview.style.display = 'block';
         };
         img.src = e.target.result;
       };
       reader.readAsDataURL(file);
     }
   }
+
   function submitData(crop, plot, subplot) {
     const val = document.getElementById('pms_val').value;
     if (!val || val < 1 || val > 15) { alert("Please enter a value (1-15)"); return; }
     const btn = document.querySelector('.popup-content button');
     btn.disabled = true; btn.innerText = "Sending...";
+
     navigator.geolocation.getCurrentPosition(pos => {
-      const formData = { crop: crop, plot: plot, subplot: subplot, value: val, lat: pos.coords.latitude, lng: pos.coords.longitude, photo: photoBase64 };
-      google.script.run.withSuccessHandler(res => {
-        if (res.status === "success") { alert("Saved successfully!"); map.closePopup(); photoBase64 = null; }
-        else { alert("Error: " + res.message); btn.disabled = false; }
-      }).submitForm(formData);
+      const payload = {
+        action: "submitForm",
+        crop: crop, plot: plot, subplot: subplot, value: val,
+        lat: pos.coords.latitude, lng: pos.coords.longitude,
+        photo: photoBase64
+      };
+
+      // ارسال داده به گوگل با متد POST
+      fetch(GOOGLE_SCRIPT_URL, {
+        method: "POST",
+        body: JSON.stringify(payload)
+      })
+      .then(res => res.json())
+      .then(res => {
+        if (res.status === "success") { 
+          alert("Saved successfully!"); 
+          map.closePopup(); 
+          photoBase64 = null; 
+        } else { 
+          alert("Error: " + res.message); 
+          btn.disabled = false; 
+        }
+      })
+      .catch(err => {
+        alert("Network Error. Check internet.");
+        btn.disabled = false;
+      });
     }, () => { alert("GPS required."); btn.disabled = false; }, {enableHighAccuracy: true});
   }
+
   function locateUser() { if (map) map.locate({setView: true, maxZoom: 17}); }
   window.onload = initMap;
 </script>
