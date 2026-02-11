@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Tana Partez Armenia GIS</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    body { margin: 0; padding: 0; font-family: Tahoma, sans-serif; }
+    #map { height: 100vh; width: 100vw; background: #e0e0e0; }
+    .loading-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: white; display: flex; justify-content: center; align-items: center; z-index: 9999; }
+    .popup-content { width: 220px; padding: 5px; }
+    .popup-content h3 { margin: 0 0 5px; color: #2e7d32; border-bottom: 2px solid #2e7d32; }
+    .popup-content label { display: block; margin-top: 10px; font-weight: bold; font-size: 11px; }
+    .popup-content input { width: 100%; padding: 8px; margin-top: 4px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px; }
+    .popup-content button { margin-top: 15px; width: 100%; padding: 12px; background: #2e7d32; color: white; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; }
+    #preview-img { width: 100%; display: none; margin-top: 10px; border-radius: 5px; border: 1px solid #ddd; }
+    #locate-btn { position: absolute; top: 20px; right: 20px; z-index: 1000; background: white; border: none; width: 50px; height: 50px; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.3); cursor: pointer; font-size: 24px; display: flex; justify-content: center; align-items: center; }
+  </style>
+  
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script>
+  // هماهنگ کردن رنگ هدر اپلیکیشن با تم تلگرام کاربر
+  window.Telegram.WebApp.ready();
+  window.Telegram.WebApp.expand(); // باز شدن تمام صفحه مینی‌اپ
+</script>
+
+</head>
+<body>
+<div id="loading" class="loading-overlay"><h3>Loading Tana Partez Farm GIS Map</h3></div>
+<div id="map"></div>
+<button id="locate-btn" onclick="locateUser()">📍</button>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+  let map;
+  let userMarker;
+  let photoBase64 = null;
+  function initMap() {
+    map = L.map('map').setView([40.1772, 44.5035], 9);
+    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { attribution: 'Esri, Maxar' }).addTo(map);
+    map.on('locationfound', e => {
+      if (userMarker) map.removeLayer(userMarker);
+      userMarker = L.circleMarker(e.latlng, {radius: 8, color: '#1565c0', fillColor: '#2196F3', fillOpacity: 0.9}).addTo(map);
+    });
+    google.script.run.withSuccessHandler(drawPolygons).withFailureHandler(err => alert("System Error: " + err)).getMapData();
+  }
+  function drawPolygons(data) {
+    document.getElementById('loading').style.display = 'none';
+    if (!data || data.error) { alert("Error: " + (data ? data.error : "No data")); return; }
+    const layers = [];
+    data.forEach(item => {
+      const polygon = L.polygon(item.coords, { color: item.color, fillColor: item.color, fillOpacity: 0.4, weight: 2 }).addTo(map);
+      layers.push(polygon);
+      const popupHtml = `<div class="popup-content"><h3>${item.subplot}</h3><p style="font-size:11px; color:#666;">${item.crop} - Plot ${item.plot}</p><label>PMS Value (1-15):</label><input type="number" id="pms_val" min="1" max="15"><label>Photo:</label><input type="file" id="pms_photo" accept="image/*" capture="environment" onchange="handlePhoto(this)"><img id="preview-img"><button onclick="submitData('${item.crop}', '${item.plot}', '${item.subplot}')">Save Record</button></div>`;
+      polygon.bindPopup(popupHtml);
+    });
+    if (layers.length > 0) { const group = new L.featureGroup(layers); map.fitBounds(group.getBounds(), {padding: [40, 40]}); }
+  }
+function handlePhoto(input) {
+    const file = input.files[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const img = new Image();
+        img.onload = () => {
+          // ایجاد یک بوم (Canvas) برای کوچک کردن عکس
+          const canvas = document.createElement('canvas');
+          let width = img.width;
+          let height = img.height;
+
+          // حداکثر عرض یا ارتفاع را روی 1000 پیکسل تنظیم می‌کنیم
+          const MAX_SIZE = 1000; 
+          if (width > height) {
+            if (width > MAX_SIZE) {
+              height *= MAX_SIZE / width;
+              width = MAX_SIZE;
+            }
+          } else {
+            if (height > MAX_SIZE) {
+              width *= MAX_SIZE / height;
+              height = MAX_SIZE;
+            }
+          }
+
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, width, height);
+
+          // تبدیل به فرمت JPEG با کیفیت 0.7 برای کاهش حجم چشمگیر
+          photoBase64 = canvas.toDataURL('image/jpeg', 0.7);
+          
+          const preview = document.getElementById('preview-img');
+          preview.src = photoBase64;
+          preview.style.display = 'block';
+          console.log("Image compressed successfully.");
+        };
+        img.src = e.target.result;
+      };
+      reader.readAsDataURL(file);
+    }
+  }
+  function submitData(crop, plot, subplot) {
+    const val = document.getElementById('pms_val').value;
+    if (!val || val < 1 || val > 15) { alert("Please enter a value (1-15)"); return; }
+    const btn = document.querySelector('.popup-content button');
+    btn.disabled = true; btn.innerText = "Sending...";
+    navigator.geolocation.getCurrentPosition(pos => {
+      const formData = { crop: crop, plot: plot, subplot: subplot, value: val, lat: pos.coords.latitude, lng: pos.coords.longitude, photo: photoBase64 };
+      google.script.run.withSuccessHandler(res => {
+        if (res.status === "success") { alert("Saved successfully!"); map.closePopup(); photoBase64 = null; }
+        else { alert("Error: " + res.message); btn.disabled = false; }
+      }).submitForm(formData);
+    }, () => { alert("GPS required."); btn.disabled = false; }, {enableHighAccuracy: true});
+  }
+  function locateUser() { if (map) map.locate({setView: true, maxZoom: 17}); }
+  window.onload = initMap;
+</script>
+</body>
+</html>
